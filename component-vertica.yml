@@ -1,0 +1,208 @@
+application:
+  configuration:
+    input.quantity: "3"
+    input.license: ""
+    input.package: ""
+
+  interfaces:
+    input:
+      quantity: "bind(workflow#input.quantity)"
+      license: "bind(workflow#input.license)"
+      package: "bind(workflow#input.package)"
+    output:
+      vertica-cluster-hosts: "bind(workflow#result.vertica-cluster-hosts)"
+      vertica-master-hosts: "bind(workflow#result.vertica-master-hosts)"
+      vertica-mc-url: "bind(workflow#result.vertica-mc-url)"
+
+  bindings:
+    - [workflow, wfService]
+    - [workflow, secureStore]
+
+  components:
+    wfService:
+      type: reference.Service
+      interfaces:
+        executor:
+          execute-workflow: receive-command(object request => object status => object status)
+          execute-command: send-command(string interface, string command, map<string, object> arguments => map<string, object> response => map<string, object> response)
+    secureStore:
+      type: reference.Service
+      interfaces:
+        keypair-store:
+          get-keypair: receive-command(string id => object privateKey)
+
+    workflow:
+      type: workflow.Instance
+      interfaces:
+        input:
+          quantity: configuration(string)
+          license: configuration(string)
+          package: configuration(string)
+        result:
+          vertica-cluster-hosts: publish-signal(list<string>)
+          vertica-master-hosts: publish-signal(list<string>)
+          vertica-mc-url: publish-signal(string)
+        keypair-store:
+          get-keypair: send-command(string id => object privateKey)
+
+      required: [keypair-store]
+
+      configuration:
+        configuration.triggers: {}
+        configuration.workflows:
+          launch:
+            steps:
+              - provision-cluster:
+                  action: provisionAmazonVm
+                  phase: provision-cluster
+                  parameters:
+                    roleName: cluster
+                    hardwareId: m3.xlarge
+                    targetQuantity: "{$.quantity}"
+                    retryCount: 1
+                    jcloudsProvider: aws-ec2
+                    jcloudsEndpoint: https://ec2.us-east-1.amazonaws.com
+                    jcloudsRegions: us-east-1
+                    jcloudsNodeNamePrefix: vertica
+                    jcloudsIdentity: "{$.identity}"
+                    jcloudsCredential: "{$.credential}"
+                    vmIdentity: root
+                    imageId: us-east-1/ami-21654848
+                    ec2SecurityGroup: default
+                  output:
+                    vertica-hosts: ips
+                    vertica-private-hosts: privateips
+
+              - connect-master:
+                  action: provisionAmazonVm
+                  precedingPhases: [ provision-cluster ]
+                  phase: provision-master
+                  parameters:
+                    roleName: master
+                    hardwareId: m3.xlarge
+                    staticIps: [ "{$.vertica-hosts[0]}" ]
+                    retryCount: 1
+                    jcloudsProvider: aws-ec2
+                    jcloudsEndpoint: https://ec2.us-east-1.amazonaws.com
+                    jcloudsRegions: us-east-1
+                    jcloudsNodeNamePrefix: vertica
+                    jcloudsIdentity: "{$.identity}"
+                    jcloudsCredential: "{$.credential}"
+                    vmIdentity: root
+                    imageId: us-east-1/ami-21654848
+                    ec2SecurityGroup: default
+                  output:
+                    vertica-master-hosts: ips
+
+              - create-ssh-key: &create-ssh-key
+                  action: execrun
+                  phase: create-ssh-key
+                  precedingPhases: [ provision-master ]
+                  parameters:
+                    roles: [ master ]
+                    command:
+                      - bash
+                      - "-c"
+                      - |
+                          ssh-keygen -t dsa -N "" -f ~/.ssh/id_dsa -q
+                          cat ~/.ssh/id_dsa.pub
+                  output:
+                    id_dsa_pub: stdout
+
+              - put-ssh-key: &put-ssh-key
+                  action: execrun
+                  phase: put-ssh-key
+                  precedingPhases: [ create-ssh-key, provision-cluster ]
+                  parameters:
+                    roles: [ cluster ]
+                    command:
+                      - bash
+                      - "-c"
+                      - |
+                          cat >>~/.ssh/authorized_keys <<EEND
+                          {$.id_dsa_pub['*'][0]}
+                          EEND
+
+              - vertica-install:
+                  action: "chefsolo"
+                  precedingPhases: [ put-ssh-key ]
+                  phase: vertica-install
+                  parameters:
+                    roles: [ cluster ]
+                    runList: ["recipe[vertica]"]
+                    recipeUrl: "https://s3.amazonaws.com/rc_vertica/cookbooks.tar.gz"
+                    jattrs:
+                      vertica:
+                        package: "{$.package}"
+
+              - vertica-create-cluster:
+                  action: "chefsolo"
+                  precedingPhases: [ vertica-install ]
+                  phase: vertica-create-cluster
+                  parameters:
+                    roles: [ master ]
+                    runList: ["recipe[vertica::cluster]"]
+                    recipeUrl: "https://s3.amazonaws.com/rc_vertica/cookbooks.tar.gz"
+                    jattrs:
+                      vertica:
+                        nodes: "{$.vertica-private-hosts}"
+                        license: "{$.license}"
+
+              - vertica-install-mc:
+                  action: "chefsolo"
+                  precedingPhases: [ vertica-create-cluster ]
+                  phase: vertica-install-mc
+                  parameters:
+                    roles: [ master ]
+                    runList: ["recipe[vertica::mc]"]
+                    recipeUrl: "https://s3.amazonaws.com/rc_vertica/cookbooks.tar.gz"
+                    jattrs:
+                      vertica:
+                        mc: "https://s3.amazonaws.com/rc_vertica/vertica-console-7.0.0-0.x86_64.RHEL5.rpm"
+
+              - vertica-create-db:
+                  action: "create-db"
+                  precedingPhases: [ vertica-install-mc ]
+                  phase: vertica-create-db
+                  parameters:
+                    roles: [ master ]
+                    nodes: "{$.vertica-private-hosts}"
+                    db:
+                      name: "test"
+                      password: "test"
+
+            return:
+              vertica-cluster-hosts:
+                value: "{$.vertica-hosts}"
+              vertica-master-hosts:
+                value: "{$.vertica-master-hosts}"
+              vertica-mc-url:
+                value: "https://{$.vertica-master-hosts[0]}:5450/"
+
+          create-db:
+            parameters:
+              - roles:
+                  description: roles of run
+              - db:
+                  description: create database on vertica
+              - nodes:
+                  description: nodes for databases
+
+            steps:
+              - create-db:
+                  action: "chefrun"
+                  phase: create-dbs
+                  parameters:
+                    isSolo: true
+                    roles: "{$.roles}"
+                    runList: [ "recipe[vertica::db]" ]
+                    recipeUrl: "https://s3.amazonaws.com/rc_vertica/cookbooks.tar.gz"
+                    jattrs:
+                      vertica:
+                        nodes: "{$.nodes}"
+                        db: "{$.db}"
+
+          destroy:
+            steps:
+              - destroy:
+                  action: undeployEnv

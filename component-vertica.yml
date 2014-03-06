@@ -148,36 +148,11 @@ application:
                         nodes: "{$.vertica-private-hosts}"
                         license: "{$.license}"
 
-              - vertica-install-mc:
-                  action: "chefsolo"
-                  precedingPhases: [ vertica-create-cluster ]
-                  phase: vertica-install-mc
-                  parameters:
-                    roles: [ master ]
-                    runList: ["recipe[vertica::mc]"]
-                    recipeUrl: "https://s3.amazonaws.com/rc_vertica/cookbooks.tar.gz"
-                    jattrs:
-                      vertica:
-                        mc: "https://s3.amazonaws.com/rc_vertica/vertica-console-7.0.0-0.x86_64.RHEL5.rpm"
-
-              - vertica-create-db:
-                  action: "create-db"
-                  precedingPhases: [ vertica-install-mc ]
-                  phase: vertica-create-db
-                  parameters:
-                    roles: [ master ]
-                    nodes: "{$.vertica-private-hosts}"
-                    db:
-                      name: "test"
-                      password: "test"
-
             return:
               vertica-cluster-hosts:
                 value: "{$.vertica-hosts}"
               vertica-master-hosts:
                 value: "{$.vertica-master-hosts}"
-              vertica-mc-url:
-                value: "https://{$.vertica-master-hosts[0]}:5450/"
 
           create-db:
             parameters:
@@ -201,6 +176,47 @@ application:
                       vertica:
                         nodes: "{$.nodes}"
                         db: "{$.db}"
+
+          install-mc:
+            parameters: []
+            steps:
+              - provision-mc:
+                  action: provisionAmazonVm
+                  phase: provision-mc
+                  parameters:
+                    roleName: mc
+                    hardwareId: m1.medium
+                    targetQuantity: "{$.quantity}"
+                    retryCount: 1
+                    jcloudsProvider: aws-ec2
+                    jcloudsEndpoint: https://ec2.us-east-1.amazonaws.com
+                    jcloudsRegions: us-east-1
+                    jcloudsNodeNamePrefix: vertica
+                    jcloudsIdentity: "{$.identity}"
+                    jcloudsCredential: "{$.credential}"
+                    vmIdentity: root
+                    imageId: us-east-1/ami-21654848
+                    ec2SecurityGroup: default
+                  output:
+                    vertica-mc-hosts: ips
+
+              - vertica-install-mc:
+                  action: "chefsolo"
+                  precedingPhases: [ provision-mc ]
+                  phase: vertica-install-mc
+                  parameters:
+                    roles: [ mc ]
+                    runList: ["recipe[vertica::mc]"]
+                    recipeUrl: "https://s3.amazonaws.com/rc_vertica/cookbooks.tar.gz"
+                    jattrs:
+                      vertica:
+                        mc: "https://s3.amazonaws.com/rc_vertica/vertica-console-7.0.0-0.x86_64.RHEL5.rpm"
+            return:
+              vertica-mc-hosts:
+                value: "{$.vertica-mc-hosts}"
+
+              vertica-mc-url:
+                value: "https://{$.vertica-mc-hosts[0]}:5450/"
 
           destroy:
             steps:

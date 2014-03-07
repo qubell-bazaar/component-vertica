@@ -1,11 +1,9 @@
 kit:
   name: "Component Vertica"
   link: https://github.com/qubell-bazaar/component-vertica
-https://github.com/qubell-bazaar/component-mysql-dev 
   applications:
     - name: "Vertica"
       manifest: https://raw.github.com/qubell-bazaar/component-vertica/master/component-vertica.yml
-https://raw.github.com/qubell-bazaar/component-mysql-dev/master/component-mysql-dev.yml
   provider:
     name: "Qubell"
     link: http://qubell.com

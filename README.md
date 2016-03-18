@@ -5,7 +5,7 @@ vertica
 
 Installs and configures [HP Vertica](http://www.vertica.com/) Community Edition.
 
-[![Install](https://raw.github.com/qubell-bazaar/component-skeleton/master/img/install.png)](https://express.qubell.com/applications/upload?metadataUrl=https://github.com/qubell-bazaar/component-vertica/raw/master/meta.yml)
+[![Install](https://raw.github.com/qubell-bazaar/component-skeleton/master/img/install.png)](https://express.tonomi.com/applications/upload?metadataUrl=https://github.com/qubell-bazaar/component-vertica/raw/master/meta.yml)
 
 Features
 --------
